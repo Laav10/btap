@@ -1,0 +1,6 @@
+#include <cstdlib>
+
+int main(int argc, char **argv) {
+  int values[8] = {};
+  values[std::atoi(argv[1])] = 1;
+}

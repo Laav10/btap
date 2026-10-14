@@ -1,22 +1,70 @@
-# BTAP: A Security-Instrumented Compiler Backend
+# BTAP
 
-**BTAP (Backend Translation and Protection)** is an experimental compiler backend designed to explore the intersection of **High-Performance GPGPU Computing** and **Systems Security**. While most compilers prioritize throughput, BTAP investigates how security primitives such as **Control-Flow Integrity (CFI)** and **Memory Safety Guards** can be baked directly into the Intermediate Representation (IR).
+BTAP is an LLVM pass built to experiment with runtime bounds checking in C++.
+It currently handles a small, predictable case: reads and writes through
+fixed-size integer arrays allocated on the stack.
 
-This project targets a virtual Instruction Set Architecture (ISA), specifically modeling the challenges of register pressure and latency hiding in massively parallel environments.
+For example, given:
 
-## Core Features
+```cpp
+int values[8] = {};
+values[index] = 42;
+return values[index];
+```
 
-- **Intermediate Representation (IR):** Utilizes a Three Address Code (TAC) structure to facilitate robust optimization passes and data flow analysis.
-- **Security Instrumentation:** Implements a "Security Pass" that automatically injects memory-integrity guards and bounds checking logic at the IR level, reducing the software attack surface.
-- **PTX Lowering:** Models the translation from high level abstractions to hardware-proximate Virtual ISA instructions (NVIDIA PTX).
+the pass adds a check before the load or store. A negative index or an index of
+`8` or greater calls the BTAP runtime, which prints what failed and exits with
+status `86`.
 
-## Architecture
+The flow is:
 
-1.  **Frontend:** C++ based lexer and parser stub for a subset of C-like syntax.
-2.  **Optimizer:** Framework for Constant Folding, Dead Code Elimination, and basic register pressure estimation.
-3.  **BTAP-Guard Pass:** The core security module that instruments code at the IR level to protect against buffer overflows and memory corruption.
-4.  **Code Generation:** A modular backend emitting PTX-styled assembly optimized for a virtual GPU target.
+```text
+C++ → Clang IR → BTAP pass → optimized IR → native executable
+```
 
-## Why BTAP?
+The pass runs before optimization, while the stack-array access is still easy
+to identify in LLVM IR. The runtime is kept separate from the pass so the
+instrumented program only links in a small reporting function.
 
-The goal is to demonstrate that "Secure by Design" principles can be implemented at the compiler level without compromising the **SIMT (Single Instruction, Multiple Threads)** execution model. By automating protection during the lowering phase, we ensure that security is a first class citizen in the GPGPU toolchain.
+## Building
+
+This was tested on Arch Linux with LLVM and Clang 23.1.1.
+
+```bash
+sudo pacman -S llvm clang cmake ninja
+cmake -S . -B build -G Ninja -DLLVM_DIR="$(llvm-config --cmakedir)"
+cmake --build build
+```
+
+Run the example like this:
+
+```bash
+scripts/instrument.sh examples/array_demo.cpp build/BTAPBoundsCheck.so out/array_demo
+out/array_demo 7
+out/array_demo -1
+```
+
+The first command prints `42`. The second reports a bounds failure and exits
+with `86`.
+
+## Tests
+
+```bash
+scripts/test.sh build/BTAPBoundsCheck.so
+```
+
+The tests run the instrumented programs at final `-O0` and `-O2`. They cover
+normal accesses, negative and upper-bound failures for reads and writes, loops,
+conditional accesses, unused one-past pointers, and running the pass twice.
+The transformed IR is verified before and after optimization.
+
+The current test run passes on LLVM 23.1.1.
+
+## Limits
+
+This is not a general memory-safety tool. BTAP does not currently track heap
+allocations, globals, aliases, pointer arithmetic, casts, multidimensional
+arrays, atomics, or volatile accesses. Unsupported patterns are left alone.
+
+Relevant code lives in `passes/`, the runtime is in `runtime/`, and the example
+and regression tests are in `examples/` and `tests/`.
